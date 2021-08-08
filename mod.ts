@@ -289,6 +289,18 @@ export async function getPolyfill(): Promise<DenoNamespace> {
 
   class File implements Deno.File {
     constructor(readonly rid: number) {}
+    truncate(len?: number): Promise<void> {
+      throw new Error("Method not implemented.");
+    }
+    truncateSync(len?: number): void {
+      throw new Error("Method not implemented.");
+    }
+    stat(): Promise<Deno.FileInfo> {
+      throw new Error("Method not implemented.");
+    }
+    statSync(): Deno.FileInfo {
+      throw new Error("Method not implemented.");
+    }
 
     write(p: Uint8Array): Promise<number> {
       return write(this.rid, p);
@@ -567,6 +579,7 @@ export async function getPolyfill(): Promise<DenoNamespace> {
       bytesSentControl: 0,
       bytesSentData: 0,
       bytesReceived: 0,
+      ops: {},
     };
   }
 
@@ -579,7 +592,7 @@ export async function getPolyfill(): Promise<DenoNamespace> {
 
   Object.freeze(build);
 
-  const version: Deno.Version = {
+  const version = {
     deno: "0.0.0",
     typescript: "0.0.0",
     v8: "0.0.0",

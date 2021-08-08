@@ -1,6 +1,35 @@
 // Copyright 2020 the Denoify authors. All rights reserved. MIT License.
 
-import type { SeekMode } from "./ops.ts";
+// import type { SeekMode } from "./ops.ts";
+// It would be great to update the version all in one go, but currently this
+// would fail during the bundle dep analysis.
+import {
+  Buffer,
+  copy,
+  iter,
+  iterSync,
+  readAll,
+  readAllSync,
+  writeAll,
+  writeAllSync,
+} from "./deps.ts";
+
+import {
+  close,
+  copyFile as opCopyFile,
+  errors,
+  getResources as resources,
+  open as opOpen,
+  purgeResources as opPurgeResources,
+  read,
+  readSync,
+  seek,
+  SeekMode,
+  seekSync,
+  truncate as opTruncate,
+  write,
+  writeSync,
+} from "./ops.ts";
 
 type DenoNamespace = typeof Deno;
 type DenoEnv = DenoNamespace["env"];
@@ -139,37 +168,31 @@ export async function unstable(): Promise<void> {
     ReadWrite,
   }
 
-  class PermissionStatus {
-    constructor(public state: "granted" | "denied" | "prompt") {}
-  }
-
-  class Permissions {
-    query(): Promise<PermissionStatus> {
-      return Promise.resolve(new PermissionStatus("granted"));
-    }
-
-    revoke(): Promise<PermissionStatus> {
-      return Promise.resolve(new PermissionStatus("granted"));
-    }
-
-    request(): Promise<PermissionStatus> {
-      return Promise.resolve(new PermissionStatus("granted"));
-    }
-  }
-
-  const permissions = new Permissions();
-
   function hostname(): string {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return (window as any).location.hostname;
   }
 
+  function metrics(): Deno.Metrics {
+    return {
+      opsDispatched: 0,
+      opsDispatchedSync: 0,
+      opsDispatchedAsync: 0,
+      opsDispatchedAsyncUnref: 0,
+      opsCompleted: 0,
+      opsCompletedSync: 0,
+      opsCompletedAsync: 0,
+      opsCompletedAsyncUnref: 0,
+      bytesSentControl: 0,
+      bytesSentData: 0,
+      bytesReceived: 0,
+      // @ts-ignore metrics for unstable requires ops
+      ops: {},
+    };
+  }
+
   denoUnstableProperties = {
     umask: readOnly(umask),
-    linkSync: readOnly(noop),
-    link: readOnly(asyncNoop),
-    symlinkSync: readOnly(noop),
-    symlink: readOnly(asyncNoop),
     dir: readOnly(dir),
     loadavg: readOnly(loadavg),
     osRelease: readOnly(osRelease),
@@ -188,16 +211,24 @@ export async function unstable(): Promise<void> {
     utimeSync: readOnly(noop),
     utime: readOnly(asyncNoop),
     ShutdownMode: readOnly(ShutdownMode),
-    shutdown: readOnly(asyncNoop),
     listenDatagram: readOnly(notImplemented),
     startTls: readOnly(notImplemented),
     kill: readOnly(noop),
-    Permissions: readOnly(Permissions),
-    permissions: readOnly(permissions),
-    PermissionStatus: readOnly(PermissionStatus),
     hostname: readOnly(hostname),
+    HttpClient: readOnly(notImplemented),
+    consoleSize: readOnly(notImplemented),
+    createHttpClient: readOnly(notImplemented),
+    emit: readOnly(notImplemented),
+    futime: readOnly(notImplemented),
+    futimeSync: readOnly(notImplemented),
+    http: readOnly({}),
+    resolveDns: readOnly(notImplemented),
+    serveHttp: readOnly(notImplemented),
+    sleepSync: readOnly(notImplemented),
+    systemCpuInfo: readOnly(notImplemented),
+    systemMemoryInfo: readOnly(notImplemented),
+    upgradeWebSocket: readOnly(notImplemented),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mainModule: readOnly(String((window as any).location)),
   };
 
   Object.assign(denoProperties, denoUnstableProperties);
@@ -219,7 +250,7 @@ export async function unstable(): Promise<void> {
  * namespace.  This will automatically be called when imported into an
  * environment where there is a `window` that does not have a `Deno` property
  * already defined (like a browser). */
-export async function getPolyfill(): Promise<DenoNamespace> {
+export function getPolyfill(): Promise<DenoNamespace> {
   if (denoProperties) {
     const shim = Object.create(null);
     Object.defineProperties(shim, denoProperties);
@@ -227,32 +258,7 @@ export async function getPolyfill(): Promise<DenoNamespace> {
     return shim;
   }
 
-  // It would be great to update the version all in one go, but currently this
-  // would fail during the bundle dep analysis.
-  const { Buffer, readAll, readAllSync, writeAll, writeAllSync } = await import(
-    "https://raw.githubusercontent.com/denoland/deno/v1.1.0/cli/js/buffer.ts"
-  );
-  const { copy, iter, iterSync } = await import(
-    "https://raw.githubusercontent.com/denoland/deno/v1.0.0/cli/js/io.ts"
-  );
-  const {
-    errors,
-    close,
-    copyFile: opCopyFile,
-    getResources: resources,
-    open: opOpen,
-    purgeResources,
-    read,
-    readSync,
-    seek,
-    SeekMode,
-    seekSync,
-    truncate: opTruncate,
-    write,
-    writeSync,
-  } = await import("./ops.ts");
-
-  purge = purgeResources;
+  purge = opPurgeResources;
 
   function exit(): void {
     window && window.close();
@@ -567,7 +573,7 @@ export async function getPolyfill(): Promise<DenoNamespace> {
   }
 
   function metrics(): Deno.Metrics {
-    return {
+    const metrics = {
       opsDispatched: 0,
       opsDispatchedSync: 0,
       opsDispatchedAsync: 0,
@@ -581,12 +587,18 @@ export async function getPolyfill(): Promise<DenoNamespace> {
       bytesReceived: 0,
       ops: {},
     };
+    // @ts-ignore unstable
+    if (denoUnstableProperties === undefined) delete metrics["ops"];
+    return metrics;
   }
 
   const build = {
     target: "browser",
     arch: "x86_64",
-    os: "browser",
+    // This is set to linux at the moment because deno std
+    // has functions that break if they dont get an expected os,
+    // TODO pull request on deno std to add browser as an os?
+    os: "linux",
     vendor: "browser",
   };
 
@@ -602,9 +614,30 @@ export async function getPolyfill(): Promise<DenoNamespace> {
 
   const customInspect = Symbol.for("custom inspect");
 
+  class PermissionStatus {
+    constructor(public state: "granted" | "denied" | "prompt") {}
+  }
+
+  class Permissions {
+    query(): Promise<PermissionStatus> {
+      return Promise.resolve(new PermissionStatus("granted"));
+    }
+
+    revoke(): Promise<PermissionStatus> {
+      return Promise.resolve(new PermissionStatus("granted"));
+    }
+
+    request(): Promise<PermissionStatus> {
+      return Promise.resolve(new PermissionStatus("granted"));
+    }
+  }
+
+  const permissions = new Permissions();
+
   denoProperties = {
     errors: readOnly(errors),
     pid: readOnly(0),
+    ppid: readOnly(0),
     noColor: readOnly(true),
     // TODO figure out what to do about the test interface
     test: readOnly(noop),
@@ -695,11 +728,35 @@ export async function getPolyfill(): Promise<DenoNamespace> {
     version: readOnly(version),
     args: readOnly([]),
     customInspect: readOnly(customInspect),
+    memoryUsage: readOnly(notImplemented),
+
+    fdatasync: readOnly(notImplemented),
+    fdatasyncSync: readOnly(notImplemented),
+    fstat: readOnly(notImplemented),
+    fstatSync: readOnly(notImplemented),
+    fsync: readOnly(notImplemented),
+    fsyncSync: readOnly(notImplemented),
+    ftruncate: readOnly(notImplemented),
+    ftruncateSync: readOnly(notImplemented),
+
     // Intentionally not exposed in the types
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-expect-error
     internal: readOnly(Symbol.for("Deno internal")),
     core: readOnly({}),
+
+    Permissions: readOnly(Permissions),
+    permissions: readOnly(permissions),
+    PermissionStatus: readOnly(PermissionStatus),
+
+    mainModule: readOnly(String((window as any).location)),
+
+    linkSync: readOnly(noop),
+    link: readOnly(asyncNoop),
+
+    symlinkSync: readOnly(noop),
+    symlink: readOnly(asyncNoop),
+    shutdown: readOnly(asyncNoop),
   };
 
   const shim = Object.create(null);

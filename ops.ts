@@ -1,7 +1,7 @@
 // Copyright 2020 the Denoify authors. All rights reserved. MIT License.
 
-import { errors } from "https://raw.githubusercontent.com/denoland/deno/v1.1.0/cli/js/errors.ts";
-export { errors } from "https://raw.githubusercontent.com/denoland/deno/v1.1.0/cli/js/errors.ts";
+import { errors } from "./errors.ts";
+export { errors } from "./errors.ts";
 
 export enum SeekMode {
   Start = 0,
